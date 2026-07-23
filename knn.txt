@@ -1,0 +1,112 @@
+import numpy as np
+import pandas as pd
+import streamlit as st
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.metrics import accuracy_score, classification_report, precision_score, recall_score, f1_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.feature_selection import mutual_info_classif
+import joblib
+
+data = pd.read_csv("C:/Users/edwar/Downloads/archive/heart_disease_dataset.csv")
+#print(data)
+#print("No. of rows in given dataset is :", data.shape[0])
+#print("No. of coulmns in given dataset is :", data.shape[1])
+df1 = data.copy()
+
+# Target distribution
+sns.countplot(x='Heart Disease', data=db)
+plt.title('Distribution of Target Variable (Heart Disease)')
+plt.xlabel('Heart Disease (1 = Yes, 0 = No)')
+plt.ylabel('Count')
+plt.show()
+
+#print(df1.isnull().sum())       # Alcohol Intake got 340 row is None, which python will assume it as missing value. 
+df1["Alcohol Intake"] = df1["Alcohol Intake"].fillna("Never")       # .fillna used to replace the missing value with a specific value. 
+
+''' To get the important features
+df12 = df1
+
+# Define the target column
+target_column = "Heart Disease" 
+
+# Separate features (X) and target (y)
+X = df12.drop(columns=[target_column])  # All columns except target
+y = df12[target_column]  # Target column
+categorical_cols = X.select_dtypes(include=['str', 'category']).columns  # Identify categorical columns
+
+# Convert categorical columns to numeric using LabelEncoder
+label_encoder = LabelEncoder()
+for col in categorical_cols:
+    X[col] = label_encoder.fit_transform(X[col])  # Encode each categorical column to numbers
+
+# Higher the score means a feature got more predictive information with target. 
+mi_scores = mutual_info_classif(X, y, discrete_features='auto')
+
+mi_df = pd.DataFrame({'Feature': X.columns, 'Mutual Information': mi_scores})
+
+# Sort the DataFrame by Mutual Information
+mi_df = mi_df.sort_values(by="Mutual Information", ascending=False)
+
+# Display the important features
+print(mi_df)
+'''
+
+df14 = df1.copy()
+important_features = ["Age", "Cholesterol", "Family History"]
+
+XX = df14[important_features].copy()
+yy = df14["Heart Disease"].copy()
+
+label_encoders = {}
+for col in XX.select_dtypes(include=['str', 'string', 'object']).columns:
+    le = LabelEncoder()
+    XX[col] = le.fit_transform(XX[col])      # Look the entire specific column and learn all unique category, then assign a unique integer to each category
+    label_encoders[col] = le
+
+yy = LabelEncoder().fit_transform(yy)
+
+scaler = StandardScaler()               # To put all the features on the exact same scale to prevent some algo will thing the larger number of other feaure more important
+X_scaled = scaler.fit_transform(XX)
+
+# Split into training (80%) and testing (20%) sets
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, yy, test_size=0.2, stratify=yy, random_state=30)
+# stratify is used to prevent the model from being trained on a biased sample, it ensure both set got equal % of health and heart disease patients. 
+
+''' # Find the best k automatically
+error_rate = []
+for i in range(1, 30):
+    knn = KNeighborsClassifier(n_neighbors=i)
+    knn.fit(X_train, y_train)                       # the model train itself
+    pred_i = knn.predict(X_test)
+    error_rate.append(np.mean(pred_i != y_test))
+
+plt.figure(figsize=(10,6))
+plt.plot(range(1,30), error_rate, color='blue', linestyle='dashed', marker='o')
+plt.title('Error Rate vs. K Value')
+plt.xlabel('K')
+plt.ylabel('Error Rate')
+plt.show()
+'''
+
+knn_classifier = KNeighborsClassifier(n_neighbors=2, weights='distance')
+knn_classifier.fit(X_train, y_train)
+y_pred_class = knn_classifier.predict(X_test)
+
+print("KNN Classification Results**")
+print(f"Accuracy: {accuracy_score(y_test, y_pred_class) * 100:.2f}%")
+print("\nClassification Report:\n", classification_report(y_test, y_pred_class))
+
+'''
+# Save the model
+joblib.dump(knn_classifier, 'knn_model.pkl')
+
+# Save the dictionary of label encoders you created
+joblib.dump(label_encoders, 'label_encoders.pkl')
+
+# SAVE THE SCALER
+joblib.dump(scaler, 'scaler.pkl')
+
+print("Model and Encoders saved successfully!")
+'''

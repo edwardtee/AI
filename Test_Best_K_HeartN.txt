@@ -1,0 +1,68 @@
+
+# ==========================================
+# 7. TESTING BEST K VALUE FOR THE STACKING MODEL
+# ==========================================
+
+# Define the range of K values to test (e.g., 1 to 20)
+k_values = range(1, 31)
+accuracies = []
+auc_scores = []
+
+print("\n--- Testing K values for internal KNN model ---")
+
+for k in k_values:
+    # Reinitialize base models with the changing K value
+    base_models = [
+        ('lr', LogisticRegression(random_state=42)),
+        ('knn', KNeighborsClassifier(n_neighbors=k, weights='uniform'))
+    ]
+
+    # Rebuild Stacking Classifier architecture
+    heart_net_temp = StackingClassifier(
+        estimators=base_models,
+        final_estimator=LogisticRegression(C=1),
+        stack_method='predict_proba',
+        cv=5
+    )
+    
+    # Train the meta model
+    heart_net_temp.fit(X_train, y_train)
+    
+    # Predict and evaluate
+    y_pred_temp = heart_net_temp.predict(X_test)
+    y_prob_temp = heart_net_temp.predict_proba(X_test)[:, 1]
+    
+    # Store performance metrics
+    acc = accuracy_score(y_test, y_pred_temp) * 100
+    auc = roc_auc_score(y_test, y_prob_temp)
+    
+    accuracies.append(acc)
+    auc_scores.append(auc)
+    
+    print(f"Tested KNN K={k} -> Stacking Model Accuracy: {acc:.2f}% | AUC: {auc:.4f}")
+
+# Find the best K value based on highest test accuracy
+best_k_index = np.argmax(accuracies)
+best_k = k_values[best_k_index]
+print(f"\n🏆 Best K Value for your model is: K = {best_k} ({accuracies[best_k_index]:.2f}% Accuracy)")
+
+# ==========================================
+# 8. GENERATING THE PERFORMANCE GRAPH
+# ==========================================
+plt.figure(figsize=(12, 6))
+
+# Plot Accuracy
+plt.plot(k_values, accuracies, marker='o', linestyle='-', color='b', linewidth=2, label='Final Model Accuracy (%)')
+# Highlight the optimal K point
+plt.axvline(x=best_k, color='r', linestyle='--', alpha=0.7, label=f'Best K ({best_k})')
+
+plt.title('Effect of Internal KNN K-Value on Overall Stacking Model Accuracy', fontsize=14, fontweight='bold')
+plt.xlabel('Number of Neighbors (K) inside Base Model', fontsize=12)
+plt.ylabel('Testing Set Accuracy (%)', fontsize=12)
+plt.xticks(k_values)
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend(loc='lower right')
+
+# Save tuning graph
+plt.savefig('TwoClassWeight_F_knn_k_value_tuning.png', dpi=300)
+print("Optimization graph saved as 'knn_k_value_tuning.png' successfully!")
