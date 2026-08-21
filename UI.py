@@ -1,172 +1,269 @@
-import streamlit as st
+import json
+from pathlib import Path
+
+import joblib
 import pandas as pd
-import numpy as np
-import joblib  # Used to load your model and encoders
+import streamlit as st
 
-st.title("❤️ Heart Disease Risk Prediction Form")
-st.write("Please fill in the patient details below to perform a prediction.")
+# ============================================================
+# Paths
+# ============================================================
+# Adjust MODEL_DIR if your saved_models folder lives elsewhere
+# relative to wherever you run `streamlit run app.py` from.
+MODEL_DIR = Path("saved_models")
+SCALER_PATH = MODEL_DIR / "heart_scaler.joblib"
+COLUMNS_PATH = MODEL_DIR / "heart_feature_columns.joblib"
+METRICS_PATH = MODEL_DIR / "metrics.json"
 
-model_choice = st.selectbox(
-    "Select Prediction Model",
-    (
-        "Hybrid RF + SVM + LR",
-        "Hybrid KNN + LR"
-    )
+# ============================================================
+# Page config
+# ============================================================
+st.set_page_config(
+    page_title="Heart Disease Risk Prediction",
+    page_icon="❤️",
+    layout="centered"
 )
 
-# 1. Load the model and encoders securely using Streamlit caching
+st.title("❤️ Heart Disease Risk Prediction System")
+st.write(
+    """
+    Pick a model, describe the patient's health profile, and get a live
+    risk prediction. All fields update the prediction instantly — no
+    button needed.
+    """
+)
+
+# ============================================================
+# Discover available models
+# ============================================================
+# Any *_model.joblib file in saved_models is treated as a selectable model.
+if not MODEL_DIR.exists():
+    st.error(f"Model directory not found: {MODEL_DIR.resolve()}")
+    st.stop()
+
+model_files = sorted(MODEL_DIR.glob("*_model.joblib"))
+
+if not model_files:
+    st.error(f"No '*_model.joblib' files found in {MODEL_DIR.resolve()}")
+    st.stop()
+
+# Friendly names for known model file prefixes.
+# knn_lr_model.joblib -> "KNN + Logistic Regression (Stacked)"
+# svm_rf_lr_model.joblib -> "SVM + Random Forest + LR (Stacked)"
+FRIENDLY_NAMES = {
+    "knn_lr": "KNN + Logistic Regression (Stacked)",
+    "svm_rf_lr": "SVM + Random Forest + LR (Stacked)",
+}
+
+MODEL_OPTIONS = {
+    FRIENDLY_NAMES.get(p.stem.replace("_model", "").lower(), p.stem.replace("_model", "").upper()): p
+    for p in model_files
+}
+
+# ============================================================
+# Cached loaders (avoid re-reading disk on every slider move)
+# ============================================================
 @st.cache_resource
-def load_models():
+def load_model(path: str):
+    return joblib.load(path)
 
-    # KNN + LR
-    knn_model = joblib.load("heart_net.pkl")
-    knn_encoders = joblib.load("label_encoders.pkl")
-    knn_scaler = joblib.load("scaler.pkl")
 
-    # RF + SVM + LR
-    rf = joblib.load("rf_model.pkl")
-    svm = joblib.load("svm_model.pkl")
-    rf_svm_lr = joblib.load("rf_svm_lr.pkl")
+@st.cache_resource
+def load_scaler(path: str):
+    return joblib.load(path)
 
-    num_imputer = joblib.load("num_imputer.pkl")
-    cat_imputer = joblib.load("cat_imputer.pkl")
-    scaler = joblib.load("rf_scaler.pkl")
-    feature_columns = joblib.load("feature_columns.pkl")
 
-    return (
-        knn_model,
-        knn_encoders,
-        knn_scaler,
-        rf,
-        svm,
-        rf_svm_lr,
-        num_imputer,
-        cat_imputer,
-        scaler,
-        feature_columns
+@st.cache_resource
+def load_columns(path: str):
+    return joblib.load(path)
+
+
+@st.cache_data
+def load_metrics(path: str):
+    """Load precomputed classification metrics per model, if available.
+
+    Expected format:
+    {
+        "KNN + Logistic Regression (Stacked)": {
+            "accuracy": 0.87, "precision": 0.84, "recall": 0.81,
+            "f1": 0.82, "roc_auc": 0.91
+        },
+        "SVM + Random Forest + LR (Stacked)": {...},
+    }
+    """
+    p = Path(path)
+    if not p.exists():
+        return None
+    with open(p, "r") as f:
+        return json.load(f)
+
+
+try:
+    scaler = load_scaler(str(SCALER_PATH))
+    feature_columns = load_columns(str(COLUMNS_PATH))
+except FileNotFoundError as e:
+    st.error(f"Required file not found: {e.filename}")
+    st.caption(
+        "Run your training script(s) first — they need to `joblib.dump()` "
+        "the scaler and the feature-column list, shared across both models."
     )
-(
-    heart_net,
-    saved_encoders,
-    knn_scaler,
-    rf,
-    svm,
-    rf_svm_lr,
-    num_imputer,
-    cat_imputer,
-    rf_scaler,
-    feature_columns
-) = load_models()
+    st.stop()
 
-# --- Your existing Column Layout UI Code stays exactly the same ---
+metrics = load_metrics(str(METRICS_PATH))
+
+# ============================================================
+# Model selection
+# ============================================================
+model_choice = st.selectbox("Select a model", list(MODEL_OPTIONS.keys()))
+
+try:
+    model = load_model(str(MODEL_OPTIONS[model_choice]))
+except FileNotFoundError:
+    st.error(f"Model file not found: {MODEL_OPTIONS[model_choice].resolve()}")
+    st.stop()
+
+# ============================================================
+# Metrics expander
+# ============================================================
+with st.expander("📊 Model Performance"):
+    if metrics is None:
+        st.info(
+            f"No metrics file found at `{METRICS_PATH}`. "
+            "Run your updated training script(s) to generate one, "
+            "then re-run this app."
+        )
+    elif model_choice not in metrics:
+        st.warning(f"No stored metrics for '{model_choice}' in metrics.json.")
+    else:
+        m = metrics[model_choice]
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Accuracy", f"{m['accuracy']*100:.2f}%")
+        col2.metric("F1-score", f"{m['f1']:.4f}")
+        col3.metric("ROC-AUC", f"{m['roc_auc']:.4f}")
+        col4, col5 = st.columns(2)
+        col4.metric("Precision", f"{m['precision']:.4f}")
+        col5.metric("Recall", f"{m['recall']:.4f}")
+
+# ============================================================
+# Training ranges (numerical features) — used for slider bounds
+# Pulled from your describe() output. Update these if your split differs.
+# ============================================================
+AGE_MIN, AGE_MAX = 25, 79
+CHOL_MIN, CHOL_MAX = 150, 349
+BP_MIN, BP_MAX = 90, 179
+HR_MIN, HR_MAX = 60, 99
+EXERCISE_MIN, EXERCISE_MAX = 0, 9
+STRESS_MIN, STRESS_MAX = 1, 10
+SUGAR_MIN, SUGAR_MAX = 70, 199
+
+# ============================================================
+# User inputs — numerical (left 2 columns) + categorical (right 2 columns)
+# ============================================================
+st.subheader("Patient Information")
+
 col1, col2 = st.columns(2)
+
 with col1:
-    st.subheader("Numerical Data")
-    age = st.number_input("Age", min_value=1, max_value=120, value=45)
-    cholesterol = st.number_input("Cholesterol Level (mg/dL)", min_value=100, max_value=500, value=200)
-    blood_pressure = st.number_input("Blood Pressure (mmHg)", min_value=80, max_value=250, value=120)
-    heart_rate = st.number_input("Heart Rate (bpm)", min_value=50, max_value=220, value=75)
-    exercise_hours = st.number_input("Weekly Exercise Hours", min_value=0, max_value=168, value=3)
-    stress_level = st.slider("Stress Level (1-10)", min_value=1, max_value=10, value=5)
-    blood_sugar = st.number_input("Blood Sugar Level (mg/dL)", min_value=50, max_value=400, value=90)
+    age = st.slider("Age", AGE_MIN, AGE_MAX, 52, 1)
+    cholesterol = st.slider("Cholesterol", CHOL_MIN, CHOL_MAX, 250, 1)
+    blood_pressure = st.slider("Blood Pressure", BP_MIN, BP_MAX, 135, 1)
+    heart_rate = st.slider("Heart Rate", HR_MIN, HR_MAX, 79, 1)
 
 with col2:
-    st.subheader("Categorical Data")
+    exercise_hours = st.slider("Exercise Hours (per week)", EXERCISE_MIN, EXERCISE_MAX, 5, 1)
+    stress_level = st.slider("Stress Level (1-10)", STRESS_MIN, STRESS_MAX, 6, 1)
+    blood_sugar = st.slider("Blood Sugar", SUGAR_MIN, SUGAR_MAX, 135, 1)
+
+col3, col4 = st.columns(2)
+
+with col3:
     gender = st.selectbox("Gender", ["Male", "Female"])
     smoking = st.selectbox("Smoking Status", ["Never", "Current", "Former"])
-    alcohol = st.selectbox("Alcohol Intake", ["None", "Moderate", "Heavy"])
+    alcohol = st.selectbox("Alcohol Intake", ["Never", "Moderate", "Heavy"])
     family_history = st.selectbox("Family History of Heart Disease?", ["No", "Yes"])
+
+with col4:
     diabetes = st.selectbox("Diabetes Diagnosis?", ["No", "Yes"])
     obesity = st.selectbox("Obesity?", ["No", "Yes"])
     angina = st.selectbox("Exercise Induced Angina?", ["No", "Yes"])
-    chest_pain = st.selectbox("Chest Pain Type", ["Non-anginal Pain", "Typical Angina", "Atypical Angina", "Asymptomatic"])
+    chest_pain = st.selectbox(
+        "Chest Pain Type",
+        ["Non-anginal Pain", "Typical Angina", "Atypical Angina", "Asymptomatic"]
+    )
 
+# ============================================================
+# Live prediction
+# ============================================================
+# Column names here MUST match the raw column names in your CSV exactly
+# (case + spacing), since they're what gets passed into pd.get_dummies().
+# Double-check these against your dataset headers — the names below are
+# my best guess based on your describe() output and selectbox labels.
+raw_input = pd.DataFrame({
+    "Age": [age],
+    "Cholesterol": [cholesterol],
+    "Blood Pressure": [blood_pressure],
+    "Heart Rate": [heart_rate],
+    "Exercise Hours": [exercise_hours],
+    "Stress Level": [stress_level],
+    "Blood Sugar": [blood_sugar],
+    "Gender": [gender],
+    "Smoking": [smoking],
+    "Alcohol Intake": [alcohol],
+    "Family History": [family_history],
+    "Diabetes": [diabetes],
+    "Obesity": [obesity],
+    "Exercise Induced Angina": [angina],
+    "Chest Pain Type": [chest_pain],
+})
 
-# 2. Trigger prediction when user clicks the button
-if st.button("Generate Prediction Data"):
-    
-    # Capture all inputs into a raw dataframe
-    user_input_df = pd.DataFrame([{
-        "Age": age, "Gender": gender, "Cholesterol": cholesterol,
-        "Blood Pressure": blood_pressure, "Heart Rate": heart_rate,
-        "Smoking": smoking, "Alcohol Intake": alcohol,
-        "Exercise Hours": exercise_hours, "Family History": family_history,
-        "Diabetes": diabetes, "Obesity": obesity,
-        "Stress Level": stress_level, "Blood Sugar": blood_sugar,
-        "Exercise Induced Angina": angina, "Chest Pain Type": chest_pain
-    }])
+numerical_columns = [
+    "Age", "Cholesterol", "Blood Pressure", "Heart Rate",
+    "Exercise Hours", "Stress Level", "Blood Sugar",
+]
+categorical_columns = [
+    "Gender", "Smoking", "Alcohol Intake", "Family History",
+    "Diabetes", "Obesity", "Exercise Induced Angina", "Chest Pain Type",
+]
 
-    if model_choice == "Hybrid KNN + LR":
-        # 3. Filter down to the exact features the hybrid model expects
-        important_features = ["Age", "Cholesterol", "Gender"]
-        X_new = user_input_df[important_features].copy()
-        
-        # 4. Encode categorical features using your SAVED encoders (No fit_transform!)
-        for col in X_new.select_dtypes(include=['str', 'string', 'object']).columns:
-            if col in saved_encoders:
-                le = saved_encoders[col]
-                X_new[col] = le.transform(X_new[col])  # Crucial: .transform(), NOT .fit_transform()
+try:
+    # Single-row input encoding: do NOT use drop_first=True here because pandas will drop
+    # the single category present in a 1-row DataFrame, making all dummy features 0.
+    encoded = pd.get_dummies(raw_input, columns=categorical_columns)
 
-        # 4.5 SCALE THE DATA (Crucial Step!)
-        # StackingClassifier internally calls each base model, all of which need scaled input
-        num_cols = ["Age", "Cholesterol"]
+    # Align to the exact column set/order the model was trained on.
+    # Any dummy column not produced by this single row (e.g. a category
+    # that isn't the current selection) gets filled with 0, matching
+    # what get_dummies would have produced during training.
+    encoded = encoded.reindex(columns=feature_columns, fill_value=0)
 
-        X_new[num_cols] = knn_scaler.transform(
-            X_new[num_cols]
-        )
+    # Scale only the numerical columns, same as training.
+    encoded[numerical_columns] = scaler.transform(encoded[numerical_columns])
 
-        # 5. Make the Prediction using the hybrid Stacking model
-        prediction = heart_net.predict(X_new)
-        prediction_proba = heart_net.predict_proba(X_new)
+    prediction = model.predict(encoded)[0]
+    label = "High Risk" if prediction == 1 else "Low Risk"
+
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(encoded)[0][1]
+        if label == "High Risk" and proba > 0.5:
+            st.warning(
+                f"Prediction ({model_choice}): **{label}** "
+                f"— estimated probability of heart disease: {proba:.1%}"
+            )
+        else:
+            st.success(
+                f"Prediction ({model_choice}): **{label}** "
+                f"— estimated probability of heart disease: {proba:.1%}"
+            )
     else:
-        X_new = user_input_df.copy()
-        numerical_columns = X_new.select_dtypes(include=["int64", "float64"]).columns
-        categorical_columns = X_new.select_dtypes(include=["str"]).columns
-        
+        st.success(f"Prediction ({model_choice}): **{label}**")
 
-        # Missing values
-        X_new[numerical_columns] = num_imputer.transform(
-            X_new[numerical_columns]
-        )
+except Exception as e:
+    st.error(f"Prediction failed: {e}")
+    st.caption(
+        "This usually means the feature columns/order, or the category "
+        "label spelling, doesn't match what your training script used. "
+        "Check `feature_columns` (heart_feature_columns.joblib) against "
+        "what pd.get_dummies() produced for this row."
+    )
 
-        X_new[categorical_columns] = cat_imputer.transform(
-            X_new[categorical_columns]
-        )
-
-        # One-hot encoding
-        X_new = pd.get_dummies(
-            X_new,
-            columns=categorical_columns,
-            drop_first=True
-        )
-
-        # Match training columns
-        X_new = X_new.reindex(
-            columns=feature_columns,
-            fill_value=0
-        )
-
-        # Scale numerical columns
-        X_new[numerical_columns] = rf_scaler.transform(
-            X_new[numerical_columns]
-        )
-        rf_prob = rf.predict_proba(X_new)
-        svm_prob = svm.predict_proba(X_new)
-        meta_features = np.hstack((rf_prob, svm_prob))
-        prediction = rf_svm_lr.predict(meta_features)
-
-        prediction_proba = rf_svm_lr.predict_proba(meta_features)
-    
-    
-    
-    
-    # 6. Display the Results beautifully
-    st.write("---")
-    st.subheader("📊 Prediction Results")
-    
-    if prediction[0] == 1:
-        st.error(f"⚠️ High Risk of Heart Disease (Confidence: {prediction_proba[0][1]*100:.1f}%)")
-    else:
-        st.success(f"✅ Low Risk of Heart Disease (Confidence: {prediction_proba[0][0]*100:.1f}%)")
-
-#py -m streamlit run UI.py
+# py -m streamlit run app.py

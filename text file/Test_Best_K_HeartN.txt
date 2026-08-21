@@ -1,0 +1,84 @@
+k_values = range(3, 31)
+cv_accuracy = []
+cv_auc = []
+
+# Outer 5-fold CV
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+print("\n--- Testing K values using 5-Fold Cross Validation ---")
+
+for k in k_values:
+
+    base_models = [
+        ('lr', LogisticRegression(random_state=42)),
+        ('knn', KNeighborsClassifier(n_neighbors=k, weights='uniform'))
+    ]
+
+    stacking_model = StackingClassifier(
+        estimators=base_models,
+        final_estimator=LogisticRegression(C=1),
+        stack_method='predict_proba',
+        cv=5          # Internal CV for stacking
+    )
+
+    # 5-fold CV Accuracy
+    acc_scores = cross_val_score(
+        stacking_model,
+        X_train,
+        y_train,
+        cv=cv,
+        scoring='accuracy'
+    )
+
+    # 5-fold CV AUC
+    auc_scores = cross_val_score(
+        stacking_model,
+        X_train,
+        y_train,
+        cv=cv,
+        scoring='roc_auc'
+    )
+
+    mean_acc = acc_scores.mean() * 100
+    mean_auc = auc_scores.mean()
+
+    cv_accuracy.append(mean_acc)
+    cv_auc.append(mean_auc)
+
+    print(f"K={k:2d} | CV Accuracy = {mean_acc:.2f}% | CV AUC = {mean_auc:.4f}")
+
+# Best K
+best_index = np.argmax(cv_accuracy)
+best_k = list(k_values)[best_index]
+
+print(f"\nBest K = {best_k}")
+print(f"Mean CV Accuracy = {cv_accuracy[best_index]:.2f}%")
+print(f"Mean CV AUC = {cv_auc[best_index]:.4f}")
+
+# ==========================================
+# PERFORMANCE GRAPH
+# ==========================================
+
+plt.figure(figsize=(12,6))
+
+plt.plot(k_values, cv_accuracy,
+         marker='o',
+         linewidth=2,
+         label='5-Fold CV Accuracy (%)')
+
+plt.axvline(best_k,
+            linestyle='--',
+            color='red',
+            label=f'Best K = {best_k}')
+
+plt.xlabel("Number of Neighbors (K)")
+plt.ylabel("Mean CV Accuracy (%)")
+plt.title("5-Fold Cross Validation for Selecting K")
+plt.xticks(k_values)
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.legend()
+MODEL_DIR = Path("Tuning Result") / "New Dataset"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+model_path = MODEL_DIR / "NewDataset_AllF_F_knn_k_value_tuning.png"
+plt.savefig(f"{model_path}", dpi=300)
+plt.show()
